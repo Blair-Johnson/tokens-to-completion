@@ -14,6 +14,18 @@ from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions, Bas
 from transformers.pytorch_utils import Conv1D
 
 
+def one_hot_encode(input_ids):
+    unique_values, unique_indices = torch.unique(input_ids, return_inverse=True)
+    #print(f"unique_values shape: {unique_values.shape}")
+    #print(f"unique_indices shape: {unique_indices.shape}")
+    one_hot_tensor = torch.zeros(input_ids.shape[0], input_ids.shape[1], unique_values.numel())
+    #print(f"one_hot_tensor shape: {one_hot_tensor.shape}")
+    one_hot_tensor = one_hot_tensor.scatter_(2, unique_indices.unsqueeze(2), 1)
+    #print(f"one_hot_tensor: {one_hot_tensor[0,:10,:]}")
+    #print(f"corresponding ids: {input_ids[0,:10]}")
+    #print(f"unique_values: {unique_values}")
+    return one_hot_tensor, unique_values
+
 class GPT2TTCAttention(GPT2Attention):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
         super().__init__(config, is_cross_attention, layer_idx)
@@ -85,6 +97,8 @@ class GPT2TTCAttention(GPT2Attention):
             attn_weights = attn_weights + attention_mask
 
         attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+        print(f'Causal Mask Shape: {causal_mask.shape}')
 
         # Downcast (if necessary) back to V's dtype (if in mixed-precision) -- No-Op otherwise
         attn_weights = attn_weights.type(value.dtype)
@@ -223,6 +237,7 @@ class GPT2TTCBlock(GPT2Block):
     def forward(
         self,
         hidden_states: Optional[Tuple[torch.FloatTensor]],
+        one_hot_ttc: Optional[Tuple[torch.FloatTensor]] = None,
         layer_past: Optional[Tuple[torch.Tensor]] = None,
         attention_mask: Optional[torch.FloatTensor] = None,
         head_mask: Optional[torch.FloatTensor] = None,
@@ -404,6 +419,16 @@ class GPT2TTCModel(GPT2Model):
 
         output_shape = (-1,) + input_shape[1:] + (hidden_states.size(-1),)
 
+        one_hot_ttc, unique_ttc_ids = one_hot_encode(ttc_ids)
+        ttc_embeds = self.wte(unique_ttc_ids).unsqueeze(0).expand(hidden_states.shape[0], unique_ttc_ids.shape[0], hidden_states.shape[-1])
+        print(f'inputs_embeds shape: {inputs_embeds.shape}')
+        print(f'ttc_embeds shape: {ttc_embeds.shape}')
+
+        # NOTE: Combining input hidden states and ttc hidden states here
+        hidden_states = torch.cat([hidden_states, ttc_embeds], dim=1)
+
+        print(f"cat'd hidden_states shape: {hidden_states.shape}")
+
         if self.gradient_checkpointing and self.training:
             if use_cache:
                 logger.warning_once(
@@ -447,6 +472,7 @@ class GPT2TTCModel(GPT2Model):
             else:
                 outputs = block(
                     hidden_states,
+                    one_hot_ttc=one_hot_ttc,
                     layer_past=layer_past,
                     attention_mask=attention_mask,
                     head_mask=head_mask[i],
@@ -534,12 +560,13 @@ class GPT2TTC(GPT2LMHeadModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        print(input_ids.shape)
-        print(ttc_ids.shape)
-        print(attention_mask.shape)
+        print(f'input_ids shape: {input_ids.shape}')
+        print(f'ttc_ids shape: {ttc_ids.shape}')
+        print(f'attention_mask shape: {attention_mask.shape}')
 
         transformer_outputs = self.transformer(
             input_ids,
+            ttc_ids=ttc_ids,
             past_key_values=past_key_values,
             attention_mask=attention_mask,
             token_type_ids=token_type_ids,
@@ -555,7 +582,7 @@ class GPT2TTC(GPT2LMHeadModel):
         )
         hidden_states = transformer_outputs[0]
 
-        print(hidden_states.shape)
+        print(f'hidden_states shape: {hidden_states.shape}')
 
         # Set device for model parallelism
         if self.model_parallel:
@@ -563,7 +590,7 @@ class GPT2TTC(GPT2LMHeadModel):
             hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
-        print(lm_logits.shape)
+        print(f'lm_logits shape: {lm_logits.shape}')
 
         loss = None
         if labels is not None:
@@ -572,9 +599,9 @@ class GPT2TTC(GPT2LMHeadModel):
             # Shift so that tokens < n predict n
             # NOTE: This does the offset by 1 so that labels line up with logits
             shift_logits = lm_logits[..., :-1, :].contiguous()
-            print(shift_logits.shape)
+            print(f'shift_logits shape: {shift_logits.shape}')
             shift_labels = labels[..., 1:].contiguous()
-            print(shift_labels.shape)
+            print(f'shift_labels shape: {shift_labels.shape}')
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
