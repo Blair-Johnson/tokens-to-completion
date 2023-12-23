@@ -55,6 +55,7 @@ from transformers import (
 from transformers.utils import check_min_version, send_example_telemetry
 from transformers.utils.versions import require_version
 from ttc import *
+from gpt2 import GPT2TTC
 
 
 # Will error if the minimal version of Transformers is not installed. Remove at your own risks.
@@ -404,13 +405,21 @@ def main():
         )
 
     if args.model_name_or_path:
-        model = AutoModelForCausalLM.from_pretrained(
+        # NOTE: Hard coded for our modified GPT2
+        model = GPT2TTC.from_pretrained(
             args.model_name_or_path,
             from_tf=bool(".ckpt" in args.model_name_or_path),
             config=config,
             low_cpu_mem_usage=args.low_cpu_mem_usage,
             trust_remote_code=args.trust_remote_code,
         )
+        #model = AutoModelForCausalLM.from_pretrained(
+        #    args.model_name_or_path,
+        #    from_tf=bool(".ckpt" in args.model_name_or_path),
+        #    config=config,
+        #    low_cpu_mem_usage=args.low_cpu_mem_usage,
+        #    trust_remote_code=args.trust_remote_code,
+        #)
     else:
         logger.info("Training new model from scratch")
         model = AutoModelForCausalLM.from_config(config, trust_remote_code=args.trust_remote_code)
@@ -513,6 +522,10 @@ def main():
 
     train_dataset = lm_datasets["train"]
     eval_dataset = lm_datasets["validation"]
+
+    for i in range(100):
+        for k in train_dataset.keys():
+            print(f'{i}:{k}:{len(train_dataset[i][k])}')
 
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):

@@ -1,4 +1,4 @@
-python -i run_clm_no_trainer.py \
+accelerate launch run_clm_no_trainer.py \
     --dataset_name wikimedia/wikipedia \
     --dataset_config_name 20231101.en \
     --model_name_or_path gpt2 \

@@ -6,8 +6,9 @@ from datasets import load_dataset
 
 
 #model = AutoModelForCausalLM.from_pretrained("gpt2")
-config = AutoConfig.from_pretrained("gpt2")
-model = GPT2TTC._from_config(config)
+#config = AutoConfig.from_pretrained("gpt2")
+#model = GPT2TTC._from_config(config)
+model = GPT2TTC.from_pretrained("gpt2")
 
 
 tokenizer = AutoTokenizer.from_pretrained("gpt2")
@@ -39,3 +40,4 @@ sample['ttc_ids'] = torch.tensor(ttc_id_stack)
 sample['attention_mask'] = torch.tensor(attention_mask_stack)
 
 res = model(**sample)
+print('done!')
