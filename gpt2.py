@@ -16,26 +16,29 @@ from transformers.pytorch_utils import Conv1D
 
 def one_hot_encode(input_ids):
     unique_values, unique_indices = torch.unique(input_ids, return_inverse=True)
-    ##print(f"unique_values shape: {unique_values.shape}")
-    ##print(f"unique_indices shape: {unique_indices.shape}")
+    #print(f"unique_values shape: {unique_values.shape}")
+    #print(f"unique_indices shape: {unique_indices.shape}")
     one_hot_tensor = torch.zeros(input_ids.shape[0], input_ids.shape[1], unique_values.numel())
-    ##print(f"one_hot_tensor shape: {one_hot_tensor.shape}")
+    one_hot_tensor = one_hot_tensor.to(input_ids.device)
+    #print(f"one_hot_tensor shape: {one_hot_tensor.shape}")
     one_hot_tensor = one_hot_tensor.scatter_(2, unique_indices.unsqueeze(2), 1)
-    ##print(f"one_hot_tensor: {one_hot_tensor[0,:10,:]}")
-    ##print(f"corresponding ids: {input_ids[0,:10]}")
-    ##print(f"unique_values: {unique_values}")
+    #print(f"one_hot_tensor: {one_hot_tensor[0,:10,:]}")
+    #print(f"corresponding ids: {input_ids[0,:10]}")
+    #print(f"unique_values: {unique_values}")
     return one_hot_tensor, unique_values
 
 class GPT2TTCAttention(GPT2Attention):
     def __init__(self, config, is_cross_attention=False, layer_idx=None):
         super().__init__(config, is_cross_attention, layer_idx)
 
+        # TODO: This is a hack to avoid overrunning the size of bias with TTC tokens
+        # need to move to model config
+        MAX_UNIQUE_TTC_TOKENS = 20
         max_positions = config.max_position_embeddings
+        tril_dim = max_positions+MAX_UNIQUE_TTC_TOKENS
         self.register_buffer(
             "bias",
-            torch.tril(torch.ones((max_positions, max_positions), dtype=torch.bool)).view(
-                1, 1, max_positions, max_positions
-            ),
+            torch.tril(torch.ones((tril_dim, tril_dim), dtype=torch.bool)).view(1,1,tril_dim,tril_dim),
             persistent=False,
         )
         self.register_buffer("masked_bias", torch.tensor(-1e4), persistent=False)
@@ -92,6 +95,8 @@ class GPT2TTCAttention(GPT2Attention):
             if one_hot_ttc != None:
                 #print(f"one_hot_ttc shape: {one_hot_ttc.shape}")
                 n_ttc = one_hot_ttc.shape[-1]
+                #print(f'query_length: {query_length}, key_length: {key_length}')
+                #print(f'key_kength-query_length: {key_length-query_length}')
                 #print(f'original causal mask:\n{causal_mask[0,0,:10,:10].int()}')
                 #print(f'original causal mask shape: {causal_mask.shape}')
                 # NOTE: Overwrite end of causal mask to attend TTC in appropriate locations

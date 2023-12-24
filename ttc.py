@@ -32,7 +32,6 @@ def map_values_to_closest_labels(values, labels):
     max_token = [label for label in labels if 'SUPER' in label][0]
     # Prepare the thresholds list with their log2 values
     thresholds = sorted([(int(np.log2(int(label.strip('<>').split('-')[1]))), label) for label in threshold_labels])
-
     # Map each value to its label
     return [find_closest_upper_bound_label(value, thresholds, max_token) for value in values]
 

@@ -471,9 +471,9 @@ def main():
     # Create and add TTC tokens to dataset
     def calculate_tokens_to_completion(single_example):
         input_ids = single_example['input_ids']
+        input_ids.append(tokenizer.eos_token_id)
         ttc = map_seq_to_ttc(input_ids, ttc_tokens)
         ttc = tokenizer(''.join(ttc))['input_ids']
-        input_ids.append(tokenizer.eos_token_id)
         single_example['input_ids'] = input_ids
         single_example['ttc_ids'] = ttc 
         single_example['attention_mask'].append(1)
@@ -492,7 +492,10 @@ def main():
     def group_texts(examples):
         # Concatenate all texts.
         concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
-        total_length = len(concatenated_examples[list(examples.keys())[0]])
+        lengths = []
+        for key in examples.keys():
+            total_length = len(concatenated_examples[key])
+            lengths.append(total_length)
         # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
         # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
         total_length = (total_length // block_size) * block_size
@@ -514,7 +517,7 @@ def main():
     with accelerator.main_process_first():
         lm_datasets = lm_datasets.map(
             group_texts,
-            batched=True,
+            batched=True, 
             num_proc=args.preprocessing_num_workers,
             load_from_cache_file=not args.overwrite_cache,
             desc=f"Grouping texts in chunks of {block_size}",
@@ -523,20 +526,16 @@ def main():
     train_dataset = lm_datasets["train"]
     eval_dataset = lm_datasets["validation"]
 
-    for i in range(100):
-        for k in train_dataset.keys():
-            print(f'{i}:{k}:{len(train_dataset[i][k])}')
-
     # Log a few random samples from the training set:
     for index in random.sample(range(len(train_dataset)), 3):
         logger.info(f"Sample {index} of the training set: {train_dataset[index]}.")
 
     # DataLoaders creation:
     train_dataloader = DataLoader(
-        train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=args.per_device_train_batch_size
+        train_dataset, shuffle=True, collate_fn=default_data_collator, batch_size=args.per_device_train_batch_size, drop_last=True
     )
     eval_dataloader = DataLoader(
-        eval_dataset, collate_fn=default_data_collator, batch_size=args.per_device_eval_batch_size
+        eval_dataset, collate_fn=default_data_collator, batch_size=args.per_device_eval_batch_size, drop_last=True
     )
 
     # Optimizer
