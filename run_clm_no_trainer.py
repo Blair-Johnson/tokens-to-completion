@@ -492,6 +492,7 @@ def main():
     def group_texts(examples):
         # Concatenate all texts.
         concatenated_examples = {k: list(chain(*examples[k])) for k in examples.keys()}
+        total_length = [len(concatenated_examples[key]) for key in concatenated_examples.keys()][0]
         # We drop the small remainder, and if the total_length < block_size  we exclude this batch and return an empty dict.
         # We could add padding if the model supported it instead of this drop, you can customize this part to your needs.
         total_length = (total_length // block_size) * block_size
@@ -665,6 +666,15 @@ def main():
                 progress_bar.update(1)
                 completed_steps += 1
 
+            if args.with_tracking:
+                accelerator.log(
+                    {
+                        "train_batch_loss": loss.detach().float().item(),
+                        "lr": lr_scheduler.get_last_lr()
+                    },
+                    step=completed_steps,
+                )
+
             if isinstance(checkpointing_steps, int):
                 if completed_steps % checkpointing_steps == 0:
                     output_dir = f"step_{completed_steps}"
@@ -682,7 +692,6 @@ def main():
 
             loss = outputs.loss
             losses.append(accelerator.gather_for_metrics(loss.repeat(args.per_device_eval_batch_size)))
-
         losses = torch.cat(losses)
         try:
             eval_loss = torch.mean(losses)
