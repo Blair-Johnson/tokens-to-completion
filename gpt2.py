@@ -16,15 +16,9 @@ from transformers.pytorch_utils import Conv1D
 
 def one_hot_encode(input_ids):
     unique_values, unique_indices = torch.unique(input_ids, return_inverse=True)
-    #print(f"unique_values shape: {unique_values.shape}")
-    #print(f"unique_indices shape: {unique_indices.shape}")
     one_hot_tensor = torch.zeros(input_ids.shape[0], input_ids.shape[1], unique_values.numel())
     one_hot_tensor = one_hot_tensor.to(input_ids.device)
-    #print(f"one_hot_tensor shape: {one_hot_tensor.shape}")
     one_hot_tensor = one_hot_tensor.scatter_(2, unique_indices.unsqueeze(2), 1)
-    #print(f"one_hot_tensor: {one_hot_tensor[0,:10,:]}")
-    #print(f"corresponding ids: {input_ids[0,:10]}")
-    #print(f"unique_values: {unique_values}")
     return one_hot_tensor, unique_values
 
 class GPT2TTCAttention(GPT2Attention):
@@ -75,7 +69,6 @@ class GPT2TTCAttention(GPT2Attention):
 
     def _attn(self, query, key, value, one_hot_ttc=None, attention_mask=None, head_mask=None):
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
-        #print(f"attn_weights shape: {attn_weights.shape}")
 
         if self.scale_attn_weights:
             attn_weights = attn_weights / torch.full(
@@ -93,18 +86,10 @@ class GPT2TTCAttention(GPT2Attention):
             # NOTE: The above logic makes the lower tril of the causal mask "shift right" when there are fewer queries than keys. Removing queries chops rows off of the top of the causal mask.
             
             if one_hot_ttc != None:
-                #print(f"one_hot_ttc shape: {one_hot_ttc.shape}")
                 n_ttc = one_hot_ttc.shape[-1]
-                #print(f'query_length: {query_length}, key_length: {key_length}')
-                #print(f'key_kength-query_length: {key_length-query_length}')
-                #print(f'original causal mask:\n{causal_mask[0,0,:10,:10].int()}')
-                #print(f'original causal mask shape: {causal_mask.shape}')
                 # NOTE: Overwrite end of causal mask to attend TTC in appropriate locations
                 causal_mask = causal_mask.expand(attn_weights.shape[0], -1, -1, -1).clone()
-                #print(f'batched Causal Mask Shape: {causal_mask.shape}')
                 causal_mask[:,:,:,:n_ttc] = one_hot_ttc.unsqueeze(1)
-                #print(f'causal mask shape after ttc: {causal_mask.shape}')
-                #print(f'causal mask after ttc: \n{causal_mask[0,0,:10,:10].int()}')
 
             mask_value = torch.finfo(attn_weights.dtype).min
             # Need to be a tensor, otherwise we get error: `RuntimeError: expected scalar type float but found double`.
@@ -218,11 +203,7 @@ class GPT2TTCAttention(GPT2Attention):
         if one_hot_ttc != None:
             # NOTE: No query vectors should be created for TTC tokens, since they don't exist in the sequence
             # query: [B, heads, unique(TTC)+T, qk_dim]
-            #print(f"query shape: {query.shape}")
-            #print(f"key shape: {key.shape}")
-            #print(f"value shape: {value.shape}")
             query = query[:,:,one_hot_ttc.shape[-1]:,:]
-            #print(f"trunc query shape: {query.shape}")
 
         if layer_past is not None:
             past_key, past_value = layer_past
@@ -291,8 +272,6 @@ class GPT2TTCBlock(GPT2Block):
         )
         attn_output = attn_outputs[0]  # output_attn: a, present, (attentions)
         outputs = attn_outputs[1:]
-        #print(f'attn_output shape: {attn_output.shape}')
-        #print(f'residual shape: {residual.shape}')
         # residual connection
         if one_hot_ttc != None:
             hidden_states = attn_output + residual[:,-attn_output.shape[1]:,:]
@@ -459,13 +438,9 @@ class GPT2TTCModel(GPT2Model):
 
         one_hot_ttc, unique_ttc_ids = one_hot_encode(ttc_ids)
         ttc_embeds = self.wte(unique_ttc_ids).unsqueeze(0).expand(hidden_states.shape[0], unique_ttc_ids.shape[0], hidden_states.shape[-1])
-        #print(f'inputs_embeds shape: {inputs_embeds.shape}')
-        #print(f'ttc_embeds shape: {ttc_embeds.shape}')
 
         # NOTE: Combining input hidden states and ttc hidden states here
         hidden_states = torch.cat([ttc_embeds, hidden_states], dim=1)
-
-        #print(f"cat'd hidden_states shape: {hidden_states.shape}")
 
         if self.gradient_checkpointing and self.training:
             if use_cache:
@@ -473,8 +448,6 @@ class GPT2TTCModel(GPT2Model):
                     "`use_cache=True` is incompatible with gradient checkpointing. Setting `use_cache=False`..."
                 )
                 use_cache = False
-
-        #print(f'attn mask: {attention_mask.shape}')
 
         presents = () if use_cache else None
         all_self_attentions = () if output_attentions else None
@@ -598,10 +571,6 @@ class GPT2TTC(GPT2LMHeadModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        #print(f'input_ids shape: {input_ids.shape}')
-        #print(f'ttc_ids shape: {ttc_ids.shape}')
-        #print(f'attention_mask shape: {attention_mask.shape}')
-
         transformer_outputs = self.transformer(
             input_ids,
             ttc_ids=ttc_ids,
@@ -620,15 +589,12 @@ class GPT2TTC(GPT2LMHeadModel):
         )
         hidden_states = transformer_outputs[0]
 
-        #print(f'hidden_states shape: {hidden_states.shape}')
-
         # Set device for model parallelism
         if self.model_parallel:
             torch.cuda.set_device(self.transformer.first_device)
             hidden_states = hidden_states.to(self.lm_head.weight.device)
 
         lm_logits = self.lm_head(hidden_states)
-        #print(f'lm_logits shape: {lm_logits.shape}')
 
         loss = None
         if labels is not None:
@@ -637,9 +603,7 @@ class GPT2TTC(GPT2LMHeadModel):
             # Shift so that tokens < n predict n
             # NOTE: This does the offset by 1 so that labels line up with logits
             shift_logits = lm_logits[..., :-1, :].contiguous()
-            #print(f'shift_logits shape: {shift_logits.shape}')
             shift_labels = labels[..., 1:].contiguous()
-            #print(f'shift_labels shape: {shift_labels.shape}')
             # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
