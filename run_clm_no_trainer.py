@@ -561,7 +561,7 @@ def main():
         name=args.lr_scheduler_type,
         optimizer=optimizer,
         num_warmup_steps=args.num_warmup_steps * args.gradient_accumulation_steps,
-        num_training_steps=args.max_train_steps * args.gradient_accumulation_steps,
+        num_training_steps=args.max_train_steps # * args.gradient_accumulation_steps, # NOTE: Accelerator should handle gradient accumulation effect on scheduler
     )
 
     # Prepare everything with our `accelerator`.
@@ -670,7 +670,7 @@ def main():
                 accelerator.log(
                     {
                         "train_batch_loss": loss.detach().float().item(),
-                        "lr": lr_scheduler.get_last_lr()
+                        "lr": lr_scheduler.get_last_lr()[-1] #list for some reason
                     },
                     step=completed_steps,
                 )
