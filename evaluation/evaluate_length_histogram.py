@@ -84,11 +84,11 @@ if __name__ == '__main__':
     gpt2_ttc = GPT2TTC.from_pretrained('../results/glamorous_bee').cuda()
     gpt2_ttc_tok = AutoTokenizer.from_pretrained('../results/glamorous_bee')
 
-    ttc_lengths = {i:[] for i in range(len(BINS))}
+    ttc_lengths = {BINS[i]:[] for i in range(len(BINS))}
     for i in tqdm(range(len(BINS))):
         target_length = BINS[i]
         for _ in range(N_SAMPLES):
-            ttc_lengths[i].append(generate_ttc(gpt2_ttc,
+            ttc_lengths[BINS[i]].append(generate_ttc(gpt2_ttc,
                                                gpt2_ttc_tok,
                                                PROMPT,
                                                MAX_NEW_TOKENS,
