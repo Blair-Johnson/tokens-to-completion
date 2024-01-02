@@ -14,7 +14,7 @@ from tqdm import tqdm
 
 PROMPT = 'History\n'
 MAX_NEW_TOKENS = 1022
-N_SAMPLES = 5
+N_SAMPLES = 10
 BINS = [8,16,32,64,128,256,512]
 
 def create_ttc_token_map(tokenizer):
@@ -76,6 +76,9 @@ if __name__ == '__main__':
                                      gpt2_tok,
                                      PROMPT,
                                      MAX_NEW_TOKENS))
+    gpt2_results = pd.DataFrame({'gpt2':gpt2_lengths})
+    gpt2_results.to_pickle(f'./hist_results/gpt2_rank_{args.rank}.pkl')
+
     del gpt2, gpt2_tok
 
     gpt2_ttc = GPT2TTC.from_pretrained('../results/glamorous_bee').cuda()
@@ -90,7 +93,6 @@ if __name__ == '__main__':
                                                PROMPT,
                                                MAX_NEW_TOKENS,
                                                target_length))
-    ttc_lengths['gpt2'] = gpt2_lengths
 
-    results = pd.DataFrame(ttc_lengths)
-    results.to_pickle(f'./hist_results/rank_{args.rank}.pkl')
+    ttc_results = pd.DataFrame(ttc_lengths)
+    ttc_results.to_pickle(f'./hist_results/ttc_rank_{args.rank}.pkl')
