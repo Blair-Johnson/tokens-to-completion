@@ -13,6 +13,8 @@ from transformers.models.gpt2.modeling_gpt2 import GPT2Block, GPT2Attention, GPT
 from transformers.modeling_outputs import CausalLMOutputWithCrossAttentions, BaseModelOutputWithPastAndCrossAttentions
 from transformers.pytorch_utils import Conv1D
 
+from ttc import map_values_to_closest_labels_nolog
+
 
 def one_hot_encode(input_ids):
     unique_values, unique_indices = torch.unique(input_ids, return_inverse=True)
@@ -69,6 +71,7 @@ class GPT2TTCAttention(GPT2Attention):
 
     def _attn(self, query, key, value, one_hot_ttc=None, attention_mask=None, head_mask=None):
         attn_weights = torch.matmul(query, key.transpose(-1, -2))
+        #print(f'attn_weights (source): {attn_weights.shape}')
 
         if self.scale_attn_weights:
             attn_weights = attn_weights / torch.full(
@@ -86,6 +89,8 @@ class GPT2TTCAttention(GPT2Attention):
             # NOTE: The above logic makes the lower tril of the causal mask "shift right" when there are fewer queries than keys. Removing queries chops rows off of the top of the causal mask.
             
             if one_hot_ttc != None:
+                #print(f'one_hot_ttc: {one_hot_ttc.shape}')
+                #print(f'causal_mask: {causal_mask.shape}')
                 n_ttc = one_hot_ttc.shape[-1]
                 # NOTE: Overwrite end of causal mask to attend TTC in appropriate locations
                 causal_mask = causal_mask.expand(attn_weights.shape[0], -1, -1, -1).clone()
@@ -100,6 +105,11 @@ class GPT2TTCAttention(GPT2Attention):
         if attention_mask is not None:
             # Apply the attention mask
             if one_hot_ttc != None:
+                # TODO: This seems to be breaking because of past_key_values on second forward call
+                #print(f'attn_weights: {attn_weights.shape}')
+                #print(f'attn_weights[:,:,:,n_ttc:]: {attn_weights[:,:,:,n_ttc:].shape}')
+                #print(f'attention_mask: {attention_mask.shape}')
+                #print(f'n_ttc: {n_ttc}')
                 attn_weights[:,:,:,n_ttc:] = attn_weights[:,:,:,n_ttc:] + attention_mask
             else:
                 attn_weights = attn_weights + attention_mask
@@ -545,6 +555,64 @@ class GPT2TTC(GPT2LMHeadModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+    def prepare_inputs_for_generation(self, input_ids, past_key_values=None, inputs_embeds=None, **kwargs):
+        token_type_ids = kwargs.get("token_type_ids", None)
+        # Omit tokens covered by past_key_values
+        if past_key_values:
+            past_length = past_key_values[0][0].shape[2]
+
+            # Some generation methods already pass only the last input ID
+            if input_ids.shape[1] > past_length:
+                remove_prefix_length = past_length
+            else:
+                # Default to old behavior: keep only final ID
+                remove_prefix_length = input_ids.shape[1] - 1
+
+            input_ids = input_ids[:, remove_prefix_length:]
+            if token_type_ids is not None:
+                token_type_ids = token_type_ids[:, -input_ids.shape[1] :]
+
+        attention_mask = kwargs.get("attention_mask", None)
+        position_ids = kwargs.get("position_ids", None)
+
+        if attention_mask is not None and position_ids is None:
+            # create position_ids on the fly for batch generation
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+            if past_key_values:
+                position_ids = position_ids[:, -input_ids.shape[1] :]
+        else:
+            position_ids = None
+
+        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
+        if inputs_embeds is not None and past_key_values is None:
+            model_inputs = {"inputs_embeds": inputs_embeds}
+        else:
+            model_inputs = {"input_ids": input_ids}
+
+        # gather kwargs for ttc decoding
+        target_length = kwargs.get("target_length", None)
+        ttc_ids = kwargs.get("ttc_ids", None)
+        prompt_length_offset = kwargs.get("prompt_length_offset", None)
+        ttc_values_to_ids = kwargs.get("ttc_values_to_ids", None)
+
+        model_inputs.update(
+            {
+                "past_key_values": past_key_values,
+                "use_cache": kwargs.get("use_cache"),
+                "position_ids": position_ids,
+                "attention_mask": attention_mask,
+                "token_type_ids": token_type_ids,
+                "target_length": target_length,
+                "ttc_ids": ttc_ids,
+                "prompt_length_offset": prompt_length_offset,
+                "ttc_values_to_ids": ttc_values_to_ids,
+            }
+        )
+
+        return model_inputs
+
+
     def forward(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -562,6 +630,9 @@ class GPT2TTC(GPT2LMHeadModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        target_length: Optional[int] = None,
+        prompt_length_offset: Optional[int] = None,
+        ttc_values_to_ids: Optional[dict[str,int]] = None,
     ) -> Union[Tuple, CausalLMOutputWithCrossAttentions]:
         r"""
         labels (`torch.LongTensor` of shape `(batch_size, sequence_length)`, *optional*):
@@ -569,7 +640,38 @@ class GPT2TTC(GPT2LMHeadModel):
             `labels = input_ids` Indices are selected in `[-100, 0, ..., config.vocab_size]` All labels set to `-100`
             are ignored (masked), the loss is only computed for labels in `[0, ..., config.vocab_size]`
         """
+        #print(f'== Begin Forward ==')
+        ##print(f'Forward Args:\n{locals()}')
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        assert ((ttc_ids==None) or (target_length==None)), f'Only one of ttc_ids or target_length may be defined.'
+
+        if prompt_length_offset == None:
+            prompt_length_offset = 0
+
+        if target_length != None:
+            assert (len(input_ids.shape) == 1) or ((input_ids.shape[0] == 1) and (len(input_ids.shape) == 2)), 'batch size must be 1 to use target_length inference'
+            assert ttc_values_to_ids != None, 'If target_length is specified, then the ttc_values_to_ids mapping should be provided'
+            #  input_ids = [5,4,7,8,9,8,7,34,2,43]
+            # prompt_ids = [5,4,7,8]
+            # prompt_length_offset = 4
+            # target_length = 10
+            # ttc_values = [13,12,11,10,9,8,7,6,5,4] ...3,2,1,0
+            ttc_tokens = list(ttc_values_to_ids.keys())
+            # [8,16,32,64,128,256,512,1024,1024]
+            ttc_numbers = list(reversed(range(target_length + prompt_length_offset)))
+            if input_ids.shape[1] > len(ttc_numbers):
+                #print(f'input_ids.shape[1]: {input_ids.shape[1]}')
+                #print(f'len ttc_numbers: {len(ttc_numbers)}')
+                ttc_numbers += [0]*(input_ids.shape[1]-len(ttc_numbers))
+                #print(f'new len ttc_numbers: {len(ttc_numbers)}')
+            ttc_numbers = ttc_numbers[:input_ids.shape[1]]
+            ttc_values = map_values_to_closest_labels_nolog(ttc_numbers, ttc_tokens)
+            ttc_ids = list(map(lambda x: ttc_values_to_ids[x], ttc_values))
+            ttc_ids = torch.tensor(ttc_ids).long()
+            ttc_ids = ttc_ids.view(input_ids.shape[0],input_ids.shape[1]).to(input_ids.device)
+            #print(f'input_ids: {input_ids.shape}')
+            #print(f'ttc_ids: {ttc_ids.shape}')
 
         transformer_outputs = self.transformer(
             input_ids,

@@ -21,6 +21,14 @@ def find_closest_upper_bound_label(value, thresholds, max_token):
             return label
     return max_token  # In case no label is found.
 
+def map_values_to_closest_labels_nolog(values, labels):
+    threshold_labels = [label for label in labels if 'SUB' in label]
+    max_token = [label for label in labels if 'SUPER' in label][0]
+    # Prepare the thresholds list with their log2 values
+    thresholds = sorted([(int(label.strip('<>').split('-')[1]), label) for label in threshold_labels])
+    # Map each value to its label
+    return [find_closest_upper_bound_label(value, thresholds, max_token) for value in values]
+
 def map_values_to_closest_labels(values, labels):
     """
     Maps a list of log2 transformed values to their closest upper bound labels.
