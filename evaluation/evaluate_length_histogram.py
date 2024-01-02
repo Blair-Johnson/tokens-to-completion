@@ -78,8 +78,8 @@ if __name__ == '__main__':
                                      MAX_NEW_TOKENS))
     del gpt2, gpt2_tok
 
-    gpt2_ttc = GPT2TTC.from_pretrained('results/glamorous_bee').cuda()
-    gpt2_ttc_tok = AutoTokenizer.from_pretrained('results/glamorous_bee')
+    gpt2_ttc = GPT2TTC.from_pretrained('../results/glamorous_bee').cuda()
+    gpt2_ttc_tok = AutoTokenizer.from_pretrained('../results/glamorous_bee')
 
     ttc_lengths = {i:[] for i in range(len(BINS))}
     for i in tqdm(range(len(BINS))):
@@ -93,4 +93,4 @@ if __name__ == '__main__':
     ttc_lengths['gpt2'] = gpt2_lengths
 
     results = pd.DataFrame(ttc_lengths)
-    results.to_pickle(f'hist_results/rank_{args.rank}.pkl')
+    results.to_pickle(f'./hist_results/rank_{args.rank}.pkl')
